@@ -1,6 +1,17 @@
 import csv
 import os
 import math
+import sys
+import struct
+
+
+# ---= ARQUIVO BINÁRIO =----
+
+ARQUIVO_BINARIO = "dados_clientes.bin"
+#formato da Struct: 
+#ID(15) | Genero(10) | Cancelou(5) | Contrato(40) | Valor(float) | Meses(int)
+FORMATO_BINARIO = "15s 10s 5s 40s f i"
+TAMANHO_REGISTRO = struct.calcsize(FORMATO_BINARIO) #sizeof
 
 
 # =----- ÁRVORE B -----=
@@ -42,17 +53,17 @@ class ArvoreB:
         if len(raiz.chaves) == (2 * self.t) - 1:
             nova_raiz = NoB(folha=False)
             nova_raiz.filhos.append(self.raiz)
-            self._dividir_filho(nova_raiz, 0)
+            self.dividir_filho(nova_raiz, 0)
             self.raiz = nova_raiz
-            self._inserir_nao_cheio(self.raiz, chave, valor)
+            self.inserir_nao_cheio(self.raiz, chave, valor)
         else:
-            self._inserir_nao_cheio(raiz, chave, valor)
+            self.inserir_nao_cheio(raiz, chave, valor)
 
-    def _inserir_nao_cheio(self, no, chave, valor):
+    def inserir_nao_cheio(self, no, chave, valor):
         i = len(no.chaves) - 1
         
         if no.folha:
-            # Encontra a posição correta e insere
+            #encontra a posição correta e insere
             no.chaves.append(None) # Expande lista
             no.valores.append(None) 
             while i >= 0 and chave < no.chaves[i]:
@@ -62,19 +73,19 @@ class ArvoreB:
             no.chaves[i + 1] = chave
             no.valores[i + 1] = valor
         else:
-            # Encontra o filho para descer
+            # encontra o filho para descer
             while i >= 0 and chave < no.chaves[i]:
                 i -= 1
             i += 1
             
-            # Se o filho estiver cheio, divide antes de descer
+            #se o filho estiver cheio, divide antes de descer
             if len(no.filhos[i].chaves) == (2 * self.t) - 1:
-                self._dividir_filho(no, i)
+                self.dividir_filho(no, i)
                 if chave > no.chaves[i]:
                     i += 1
-            self._inserir_nao_cheio(no.filhos[i], chave, valor)
+            self.inserir_nao_cheio(no.filhos[i], chave, valor)
 
-    def _dividir_filho(self, pai, indice):
+    def dividir_filho(self, pai, indice):
         t = self.t
         filho = pai.filhos[indice]
         novo_no = NoB(folha=filho.folha)
@@ -117,24 +128,123 @@ class ArvoreB:
 
 class Cliente: 
     #esses foram os dados que eu ahei mais importantes de começo
-    def __init__(self, id_cliente, genero, cancelou, cobranca_mensal, contrato):
+    def __init__(self, id_cliente, genero, cancelou, valor_mensal, contrato, meses):
         self.id_cliente = id_cliente
         self.genero = genero #booleano a principio
         self.cancelou = cancelou #booleano
-        self.cobranca_mensal = float(cobranca_mensal)
+        self.valor_mensal = float(valor_mensal)
         self.contrato = contrato
         self.meses = int(meses)
 
+    def to_bytes(self):
+        return struct.pack(
+            FORMATO_BINARIO,
+            self.id_cliente.encode("utf-8"),
+            self.genero.encode("utf-8"),
+            self.cancelou.encode("utf-8"),
+            self.contrato.encode("utf-8"),
+            float(self.valor_mensal),
+            int(self.meses),
+        )
+
+    @classmethod #essa é de longe a coisa mais estranha que eu já vi, sugiro não mecher aqui
+    def from_bytes(cls, dados):
+        unpacked = struct.unpack(FORMATO_BINARIO, dados)
+        return cls(
+            unpacked[0].decode().strip("\x00"),
+            unpacked[1].decode().strip("\x00"),
+            unpacked[2].decode().strip("\x00"),
+            unpacked[4],
+            unpacked[3].decode().strip("\x00"),
+            unpacked[5]
+        )
+
     def __repr__(self):
-        return f"[{self.id_cliente}] {self.genero} | {self.contrato} | R${self.cobranca_mensal:.2f} | Cancelou: {self.cancelou}"
+        return f"[{self.id_cliente}] {self.genero} | {self.contrato} | R${self.valor_mensal:.2f} | Cancelou: {self.cancelou}"
 
 
 # =---- Classe do gerenciador ----=
 
 class SistemaDeAnalise:
     def __init__(self):
-        #inicializa a árvore com grau mínimo 3 
         self.arvore_clientes = ArvoreB(grau_minimo=3)
+
+    def inicializar(self, nome_csv):
+    # Se existir o binário ele carrega na memoria
+        if os.path.exists(ARQUIVO_BINARIO):
+            print(f"Arquivo binário encontrado. Carregando dados...")
+            self.carregar_binario()
+        else:
+            # Senão importa do .csv
+            print(f"Nenhum binário encontrado. Importando '{nome_csv}'...")
+            self.salvar_binario(nome_csv)
+
+    def carregar_binario(self):
+        #lê o arquivo .bin linha por linha e põe na árvore
+        try:
+            with open(ARQUIVO_BINARIO, 'rb') as arquivo:
+                contador = 0
+                while True:
+                    #lê bloco de bytes do tamanho exato de um registro
+                    bytes_lidos = arquivo.read(TAMANHO_REGISTRO)
+                    if not bytes_lidos:
+                        break #fim do arquivo
+                    
+                    #insere cliente nna árvore
+                    cliente = Cliente.from_bytes(bytes_lidos)
+                    self.arvore_clientes.inserir(cliente.id_cliente, cliente)
+                    contador += 1
+            print(f"{contador} clientes carregados do arquivo binário para a memória.")
+        except Exception as e:
+            print(f"Falha ao ler binário: {e}")
+
+    def salvar_binario(self, nome_csv):
+     #lê o .csv, adicona na árvore e salva no arquivo binário 
+        if not os.path.exists(nome_csv):
+            print("Arquivo .csv não encontrado.")
+            return
+
+        lista_buffer = [] # Buffer temporário para salvar no disco depois
+
+        try:
+            with open(nome_csv, mode='r', encoding='utf-8') as arquivo:
+                leitor = csv.DictReader(arquivo)
+                contador = 0
+
+                for linha in leitor:
+                    #tratamento de dados numéricos
+                    try: valor_mensal = float(linha['MonthlyCharges'])
+                    except: valor_mensal = 0.0
+                    
+                    try: meses = int(linha['tenure'])
+                    except: meses = 0
+
+                    novo_cliente = Cliente(
+                        id_cliente=linha['customerID'],
+                        genero=linha['gender'],
+                        cancelou=linha['Churn'],
+                        valor_mensal=valor_mensal,
+                        contrato=linha['Contract'],
+                        meses=meses
+                    )
+                    
+                    # 1. Insere na Árvore (Memória RAM)
+                    self.arvore_clientes.inserir(novo_cliente.id_cliente, novo_cliente)
+                    
+                    # 2. Adiciona ao buffer para gravar no disco
+                    lista_buffer.append(novo_cliente)
+                    contador += 1
+            
+            # Gravação no Arquivo Binário
+            with open(ARQUIVO_BINARIO, 'wb') as bin_file:
+                for c in lista_buffer:
+                    bin_file.write(c.to_bytes())
+            
+            print(f"{contador} registros importados do .csv e salvos em '{ARQUIVO_BINARIO}'.")
+            
+        except Exception as erro:
+            print(f"Falha na importação: {erro}")
+
 
     #função que pega os dados do arquivo .csv
     def carregar_dados(self, nome_arquivo):
@@ -145,7 +255,7 @@ class SistemaDeAnalise:
                 contador = 0
 
                 
-                #para adicionar mais dados tem que editar [aqui]
+                #para adicionar mais dados tem que editar [aqui] e na função salvar_binario
                 for linha in leitor:
                     try:
                         valor_mensal = float(linha['MonthlyCharges'])
@@ -157,12 +267,13 @@ class SistemaDeAnalise:
                     except ValueError:
                         valor_mensal = -1
 
-                    novo_cliente = Cliente( 
+                    novo_cliente = Cliente( #e aqui
                         id_cliente=linha['customerID'],
                         genero=linha['gender'],
                         cancelou=linha['Churn'],
-                        cobranca_mensal=valor_mensal,
-                        contrato=linha['Contract']
+                        valor_mensal=valor_mensal,
+                        contrato=linha['Contract'],
+                        meses=meses
                     )
                     
                     # =--- INSERÇÃO NA ÁRVORE B ---=
@@ -173,7 +284,7 @@ class SistemaDeAnalise:
                 print(f"Leitura finalizada. {contador} registros inseridos na Árvore B.")
         
         except FileNotFoundError:
-            print("Arquivo CSV não encontrado.")
+            print("Arquivo .csv não encontrado.")
         except Exception as erro:
             print(f"Erro inesperado: {erro}")
 
@@ -200,7 +311,7 @@ class SistemaDeAnalise:
         
         for cliente in todos_clientes:
             if cliente.cancelou == status_cancelamento:
-                soma += cliente.cobranca_mensal
+                soma += cliente.valor_mensal
                 conta += 1
         
         if conta == 0:
@@ -212,13 +323,16 @@ class SistemaDeAnalise:
 
 def menu():
     sistema = SistemaDeAnalise()
-    nome_arquivo = 'WA_Fn-UseC_-Telco-Customer-Churn.csv' #arquivo padrão do Kaggle, é procurado na mesma pasta em que está o programa do python
-    
-    if not os.path.exists(nome_arquivo):
-        print(f"O arquivo padrão '{nome_arquivo}' não foi encontrado.")
-        nome_arquivo = input("Por favor, digite o nome do arquivo CSV: ") #precisa conter o .csv
+    nome_arquivo = 'WA_Fn-UseC_-Telco-Customer-Churn.csv' #Nome do arquivo do Kaggle, o programa procura-o no mesmo diretorio que o código
 
-    sistema.carregar_dados(nome_arquivo)
+    #sistema.inicializar(nome_arquivo) #debug
+
+    # se não existir binário e não existir o csv, pedir outro
+    if not os.path.exists(ARQUIVO_BINARIO) and not os.path.exists(nome_arquivo):
+        nome_arquivo = input("Arquivo .csv não encontrado. Digite o nome: ")
+
+    # carregar .csv ===- tem que substituir por sistema.inicializar() -===
+    sistema.inicializar(nome_arquivo)
 
     while True:
         print("\n" + "="*40)
@@ -227,7 +341,8 @@ def menu():
         print("1. Buscar Cliente por ID")
         print("2. Filtrar por Contrato e Status")
         print("3. Calcular Média de Gasto Mensal")
-        print("4. Sair")
+        print("4. Recarregar do CSV (resetar binário)")
+        print("5. Sair")
         print("-" *35)
         opcao = input("Escolha uma opção: ")
 
@@ -244,11 +359,12 @@ def menu():
         elif opcao == '2': 
             contrato = input("Tipo de Contrato (ex: Month-to-month, One year, Two year): ")
             status = input("Cancelou? (Yes/No): ")
+            status = status.capitalize() #necessário pois os dados são Yes/No
             res = sistema.filtro(status, contrato)
             if res:
                 print(f"\n {len(res)} clientes encontrados.")
                 for c in res[:3]: print(c) #exibe os 3 primeiros como exemplo
-                if len(res) > 3: print("...")
+                if len(res) >3: print("...")
             else:
                 print("\n Nenhum registro encontrado.")
 
@@ -259,7 +375,16 @@ def menu():
             print(f"Cancelados: R${media_churn:.2f}")
             print(f"Ativos    : R${media_ativos:.2f}")
 
-        elif opcao == '4':
+        elif opcao == '4': #deleta o arquivo BINARIO E RETORNA O .CSV
+            if os.path.exists(ARQUIVO_BINARIO):
+                os.remove(ARQUIVO_BINARIO)
+                print("Binário deletado.")
+                sistema = SistemaDeAnalise()
+                sistema.carregar_dados(nome_arquivo)
+            else:
+                print(" Arquivo binário não existe para ser deletado.")
+
+        elif opcao == '5':
             break
             exit()
 
