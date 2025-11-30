@@ -10,7 +10,7 @@ import struct
 ARQUIVO_BINARIO = "dados_clientes.bin"
 #formato da Struct: 
 #ID(15) | Genero(10) | Cancelou(5) | Contrato(40) | Valor(float) | Meses(int)
-FORMATO_BINARIO = "15s 10s 5s 40s f i"
+FORMATO_BINARIO = "15s 10s 5s 40s f i i"
 TAMANHO_REGISTRO = struct.calcsize(FORMATO_BINARIO) #sizeof
 
 
@@ -36,16 +36,34 @@ class ArvoreB:
         while i < len(no.chaves) and chave > no.chaves[i]:
             i += 1
         
-        
         if i < len(no.chaves) and chave == no.chaves[i]: #se encontrou a chave neste nó, retorna o valor
             return no.valores[i]
-        
         
         if no.folha:
             return None
         
-        
         return self.buscar(chave, no.filhos[i])
+
+    #função que percorre a árvoré toda procurando cliente(s) especifico(s)
+    def percorrer_filtrado(self, no, func):
+        if no is None:
+            no = self.raiz
+
+        i = 0
+        while i < len(no.chaves):
+            # Desce à esquerda
+            if not no.folha:
+                self.percorrer_filtrado(no.filhos[i], func)
+
+            # verifica o resultado da buscs
+            cliente = no.valores[i]
+            func(cliente) #é chamado para cada cliente da árvore, em ordem
+
+            i += 1
+
+        #último filho à direita
+        if not no.folha:
+            self.percorrer_filtrado(no.filhos[i], func)
 
     def inserir(self, chave, valor):
         raiz = self.raiz
@@ -84,7 +102,7 @@ class ArvoreB:
                 if chave > no.chaves[i]:
                     i += 1
             self.inserir_nao_cheio(no.filhos[i], chave, valor)
-
+    
     def dividir_filho(self, pai, indice):
         t = self.t
         filho = pai.filhos[indice]
@@ -128,13 +146,14 @@ class ArvoreB:
 
 class Cliente: 
     #esses foram os dados que eu ahei mais importantes de começo
-    def __init__(self, id_cliente, genero, cancelou, valor_mensal, contrato, meses):
-        self.id_cliente = id_cliente
+    def __init__(self, id_cliente, genero, cancelou, valor_mensal, contrato, meses, idade):
+        self.id_cliente = id_cliente 
         self.genero = genero #booleano a principio
         self.cancelou = cancelou #booleano
         self.valor_mensal = float(valor_mensal)
         self.contrato = contrato
         self.meses = int(meses)
+        self.idade = int(idade)
 
     def to_bytes(self):
         return struct.pack(
@@ -145,6 +164,7 @@ class Cliente:
             self.contrato.encode("utf-8"),
             float(self.valor_mensal),
             int(self.meses),
+            int(self.idade),
         )
 
     @classmethod #essa é de longe a coisa mais estranha que eu já vi, sugiro não mecher aqui
@@ -156,7 +176,8 @@ class Cliente:
             unpacked[2].decode().strip("\x00"),
             unpacked[4],
             unpacked[3].decode().strip("\x00"),
-            unpacked[5]
+            unpacked[5],
+            unpacked[6]
         )
 
     def __repr__(self):
@@ -178,6 +199,11 @@ class SistemaDeAnalise:
             # Senão importa do .csv
             print(f"Nenhum binário encontrado. Importando '{nome_csv}'...")
             self.salvar_binario(nome_csv)
+            
+    def limpar(self):
+        #Zera a árvore
+        self.grau_minimo = 3
+        self.arvore_clientes = ArvoreB(self.grau_minimo)
 
     def carregar_binario(self):
         #lê o arquivo .bin linha por linha e põe na árvore
@@ -207,6 +233,9 @@ class SistemaDeAnalise:
         lista_buffer = [] # Buffer temporário para salvar no disco depois
 
         try:
+            
+            self.limpar() # limpa a árvore antes de inserir para evitar duplicação
+            
             with open(nome_csv, mode='r', encoding='utf-8') as arquivo:
                 leitor = csv.DictReader(arquivo)
                 contador = 0
@@ -214,10 +243,13 @@ class SistemaDeAnalise:
                 for linha in leitor:
                     #tratamento de dados numéricos
                     try: valor_mensal = float(linha['MonthlyCharges'])
-                    except: valor_mensal = 0.0
+                    except: valor_mensal = -1.0
                     
                     try: meses = int(linha['tenure'])
-                    except: meses = 0
+                    except: meses = -1
+
+                    try: idade = int(linha['Age'])
+                    except: idade = -1
 
                     novo_cliente = Cliente(
                         id_cliente=linha['customerID'],
@@ -225,13 +257,14 @@ class SistemaDeAnalise:
                         cancelou=linha['Churn'],
                         valor_mensal=valor_mensal,
                         contrato=linha['Contract'],
-                        meses=meses
+                        meses=meses,
+                        idade=idade
                     )
                     
-                    # 1. Insere na Árvore (Memória RAM)
+                    #Insere na Árvore
                     self.arvore_clientes.inserir(novo_cliente.id_cliente, novo_cliente)
                     
-                    # 2. Adiciona ao buffer para gravar no disco
+                    #Adiciona ao buffer para gravar no disco
                     lista_buffer.append(novo_cliente)
                     contador += 1
             
@@ -265,7 +298,12 @@ class SistemaDeAnalise:
                     try:
                         meses = int(linha['tenure'])
                     except ValueError:
-                        valor_mensal = -1
+                        meses = -1
+
+                    try:
+                        idade = int(linha['Age'])
+                    except ValueError:
+                        idade = -1
 
                     novo_cliente = Cliente( #e aqui
                         id_cliente=linha['customerID'],
@@ -273,7 +311,8 @@ class SistemaDeAnalise:
                         cancelou=linha['Churn'],
                         valor_mensal=valor_mensal,
                         contrato=linha['Contract'],
-                        meses=meses
+                        meses=meses,
+                        idade=idade
                     )
                     
                     # =--- INSERÇÃO NA ÁRVORE B ---=
@@ -288,35 +327,80 @@ class SistemaDeAnalise:
         except Exception as erro:
             print(f"Erro inesperado: {erro}")
 
-    def buscar_id(self, id_busca):
+    def buscar_id(self, busca):
         # --- Utiliza a busca da Árvore B -----
-        return self.arvore_clientes.buscar(id_busca)
-
-    def filtro(self, status_cancelamento, tipo_contrato):
-        # Para filtrar ela percorre todos os itmes
-        todos_clientes = self.arvore_clientes.coletar_todos()
-        resultados = []
-        
-        for cliente in todos_clientes:
-            if cliente.cancelou == status_cancelamento and cliente.contrato == tipo_contrato:
-                resultados.append(cliente)
-                
-        return resultados
-
-    # --- Percorre a árvore para calcular estatísticas ----
+        return self.arvore_clientes.buscar(busca)
+    
     def calcular_media(self, status_cancelamento):
         todos_clientes = self.arvore_clientes.coletar_todos()
         soma = 0.0
         conta = 0
-        
         for cliente in todos_clientes:
             if cliente.cancelou == status_cancelamento:
                 soma += cliente.valor_mensal
                 conta += 1
-        
-        if conta == 0:
-            return 0.0
-        return soma / conta
+        return soma / conta if conta > 0 else 0.0
+
+#====-- as próximas funções são todas de filtragem por algum atributo ---====
+
+    #  tentei usar a função lambda mas não entendi como funciona
+    #  achei mais fácil dar 10^6 def teste()
+    def filtrar_churn(self, status_cancelamento):
+        def teste(cliente):
+            if cliente.cancelou == status_cancelamento:
+                print(cliente)
+        self.arvore_clientes.percorrer_filtrado(None, teste)
+
+    def filtrar_contrato(self, tipo_contrato):
+        def teste(cliente):
+            if cliente.contrato == tipo_contrato:
+                print(cliente)
+        self.arvore_clientes.percorrer_filtrado(None, teste)
+
+    def filtrar_valor(self, minimo, maximo):
+        def teste(cliente):
+            if minimo <= cliente.valor_mensal <= maximo:
+                print(cliente)
+        self.arvore_clientes.percorrer_filtrado(None, teste)
+
+    def filtrar_genero(self, genero):
+        def teste(cliente):
+            if cliente.genero == genero:
+                print(cliente)
+        self.arvore_clientes.percorrer_filtrado(None, teste)
+
+    def filtrar_idade(self, idade_min, idade_max):
+        def teste(cliente):
+            if idade_min <= cliente.idade <= idade_max:
+                print(cliente)
+        self.arvore_clientes.percorrer_filtrado(None, teste)
+
+
+    def filtrar_varios(self,  cancelou, tipo_contrato,valor_min, valor_max, genero, idade_min, idade_max):
+        def teste(cliente):
+            if (idade_min <= cliente.idade <= idade_max and #virou várzea
+                cliente.genero == genero and (cliente.contrato == tipo_contrato or tipo_contrato == '-') and
+                valor_min <= cliente.valor_mensal <= valor_max and
+                (cliente.cancelou == cancelou or cancelou == '-')):
+                print(cliente)
+
+        self.arvore_clientes.percorrer_filtrado(None, teste)
+
+
+# --- Percorre a árvore para calcular estatísticas ----
+def calcular_media(self, status_cancelamento):
+    todos_clientes = self.arvore_clientes.coletar_todos()
+    soma = 0.0
+    conta = 0
+    
+    for cliente in todos_clientes:
+        if cliente.cancelou == status_cancelamento:
+            soma += cliente.valor_mensal
+            conta += 1
+    
+    if conta == 0:
+        return 0.0
+    return soma / conta
 
 
 # =------- (MENU) -------=
@@ -354,10 +438,48 @@ def menu():
             else:
                 print("\n Cliente não encontrado.")
                 
- #eu queria separar os dois filtros (pesquisar apenas contrato ou cancelou) mas enquanto não adiconamos mais opções de filtros
- #vou deixar juntos porque é menos trabalho
-        elif opcao == '2': 
-            contrato = input("Tipo de Contrato (ex: Month-to-month, One year, Two year): ")
+         #opção 2 contém texto de tamanho bíblico
+        elif opcao == '2':
+            print("-" *35)
+            print("Por qual atributo deseja filtrar? ")
+            print("1. Status Cancelamento")
+            print("2. Tipo de Contrato")
+            print("3. Valor Mensal")
+            print("4. Gênero")
+            print("5. Idade")
+            print("6. Vários filtros")
+            print("-" *35)
+            opcao_filtro = input("\nEscolha uma opção: ")
+            if opcao_filtro =='1':
+                churn = input("Status do Cancelamento (Yes/No): ")
+                churn = churn.capitalize()
+                sistema.filtrar_churn(churn)
+            elif opcao_filtro == '2':
+                contrato = input("Tipo de Contrato (ex: Month-to-month, One year, Two year): ")
+                sistema.filtrar_contrato(contrato)
+            elif opcao_filtro == '3':
+                valmin = int(input("Valor mínimo: "))
+                valmax = int(input("Valor máximo: "))
+                sistema.filtrar_valor(valmin,valmax)
+            elif opcao_filtro == '4':
+                genero = input("Gênero (Male/Female): ")
+                sistema.filtrar_genero(genero)
+            elif opcao_filtro == '5':
+                iddmin = int(input("Idade mínima: "))
+                iddmax = int(input("Idade máxima: "))
+                sistema.filtrar_idade(iddmin,iddmax)
+            elif opcao_filtro == '6':
+                churn = input("Status do Cancelamento (Yes/No/-): ")
+                churn = churn.capitalize()
+                contrato = input("Tipo de Contrato (ex: Month-to-month, One year, - ): ")
+                valmin = int(input("Valor mínimo: "))
+                valmax = int(input("Valor máximo: "))
+                genero = input("Gênero (Male/Female): ")
+                iddmin = int(input("Idade mínima: "))
+                iddmax = int(input("Idade máxima: "))
+                sistema.filtrar_varios(churn, contrato, valmin, valmax, genero, iddmin, iddmax)
+            else: print("Filtro inexistente ")
+            '''contrato = input("Tipo de Contrato (ex: Month-to-month, One year, Two year): ")
             status = input("Cancelou? (Yes/No): ")
             status = status.capitalize() #necessário pois os dados são Yes/No
             res = sistema.filtro(status, contrato)
@@ -366,7 +488,7 @@ def menu():
                 for c in res[:3]: print(c) #exibe os 3 primeiros como exemplo
                 if len(res) >3: print("...")
             else:
-                print("\n Nenhum registro encontrado.")
+                print("\n Nenhum registro encontrado.")'''
 
         elif opcao == '3': #teste pra ver se pesquisa e operações na árvore funcionam
             media_churn = sistema.calcular_media("Yes")
@@ -375,14 +497,14 @@ def menu():
             print(f"Cancelados: R${media_churn:.2f}")
             print(f"Ativos    : R${media_ativos:.2f}")
 
-        elif opcao == '4': #deleta o arquivo BINARIO E RETORNA O .CSV
+        elif opcao == '4': #deleta o arquivo BINARIO E recria-o a partir do .csv
             if os.path.exists(ARQUIVO_BINARIO):
                 os.remove(ARQUIVO_BINARIO)
-                print("Binário deletado.")
-                sistema = SistemaDeAnalise()
-                sistema.carregar_dados(nome_arquivo)
+                print("Binário deletado. Gerando a partir do .csv . . .")
             else:
-                print(" Arquivo binário não existe para ser deletado.")
+                print("Arquivo binário não existe. Gerando a partir do .csv . . .")
+
+            sistema.salvar_binario(nome_arquivo)
 
         elif opcao == '5':
             break
