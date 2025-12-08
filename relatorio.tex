@@ -1,0 +1,120 @@
+\documentclass[12pt, a4paper]{article}
+
+% --- Pacotes Fundamentais ---
+\usepackage[utf8]{inputenc}     % Codificação de caracteres
+\usepackage[T1]{fontenc}        % Codificação de fontes
+\usepackage[brazil]{babel}      % Idioma para hifenização e títulos
+\usepackage{amsmath, amssymb}   % Pacotes matemáticos
+\usepackage{geometry}           % Configuração de margens
+\usepackage{hyperref}           % Links clicáveis
+\usepackage{indentfirst}        % Indenta o primeiro parágrafo das seções
+
+\geometry{
+ a4paper,
+ left=3cm,
+ right=2cm,
+ top=3cm,
+ bottom=2cm
+}
+
+\title{\textbf{Relatório: Implementação de Sistema de Indexação e Pesquisa de Dados}}
+\author{Gabriel Iza Fauth \\ Melchior Boaretto Neto}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este relatório descreve a implementação de um sistema de gerenciamento de dados 
+utilizando indexação via Árvore B em memória principal e persistência em arquivo binário. 
+O sistema foi desenvolvido para gerenciar um conjunto de dados de cancelamento de clientes (Churn), 
+permitindo operações de inserção, busca eficiente por chave primária e filtragem sequencial por atributos secundários.
+\end{abstract}
+
+\section{Dos dados utilizados}
+
+O conjunto de dados selecionado para este projeto 
+é o \textit{Telco Customer Churn}.
+
+\subsection{Origem}
+Os dados foram obtidos originalmente da plataforma Kaggle e 
+representam o perfil de consumo e status de contrato de clientes. 
+O arquivo encontra-se em formato CSV.
+
+\subsection{Esquema de Dados Adotado}
+Foram selecionados os seguintes atributos, mapeados para uma 
+estrutura de tamanho fixo de 83 bytes (antes de eventual padding):
+
+\begin{itemize}
+    \item \textbf{ID do Cliente (15 bytes):} Identificador único.
+    \item \textbf{Gênero (10 bytes):} Male ou Female.
+    \item \textbf{Cancelou (5 bytes):} Indicador de \textit{Churn} (Yes/No).
+    \item \textbf{Contrato (40 bytes):} Tipo de contrato (Mensal, Anual, etc.).
+    \item \textbf{Valor Mensal (float - 4 bytes):} Custo mensal.
+    \item \textbf{Meses (int - 4 bytes):} Tempo de permanência.
+    \item \textbf{Idade (int - 4 bytes):} Idade do cliente.
+\end{itemize}
+
+\section{Índices e Estruturas de Dados}
+
+Toda a eficiência do projeto baseia-se na implementação de uma estrutura de dados hierárquica
+para indexação.
+
+\subsection{Estrutura de Indexação: Árvore B}
+Foi implementada uma \textbf{Árvore B} com grau mínimo $t=3$. Esta escolha
+justifica-se pelo fato das operações serem feitas assintoticamente em $O(\log_t n)$.
+Além disso, diferentemente da classe das \textit{ABPs}, a altura da árvore se mantém
+extremamente curta.
+
+\begin{itemize}
+    \item \textbf{Atributo Indexado (Chave):} O campo \texttt{id\_cliente} é a chave primária de indexação.
+    \item \textbf{Implementação:} A árvore reside em memória principal durante a execução. 
+    Cada nodo pode conter entre $t-1$ e $2t-1$ chaves. O split de nodos ocorre na descida durante a inserção.
+\end{itemize}
+
+\subsection{Persistência de Dados}
+A persistência utiliza manipulação direta de arquivos binários.
+\begin{itemize}
+    \item O sistema converte os objetos da classe \texttt{Cliente} para \textit{bytes} utilizando a biblioteca 
+    \texttt{struct} do Python (Serialização).
+    \item Isso permite acesso aleatório e leitura sequencial rápida, 
+    eliminando o \textit{overhead} de \textit{parsing} de texto exigido por 
+    arquivos CSV a cada execução.
+\end{itemize}
+
+\section{Implementação e Interface}
+
+\subsection{Tecnologias Utilizadas}
+\begin{itemize}
+    \item \textbf{Linguagem:} Python.
+    \item \textbf{Repositório:} \url{https://github.com/GFauth/Churn-Viewer}
+\end{itemize}
+
+\subsection{Interface do Usuário}
+A interação ocorre via Interface de Linha de Comando (CLI). O sistema apresenta um menu interativo 
+com estas funcionalidades:
+\begin{enumerate}
+    \item \textbf{Buscar Cliente por ID:} Utiliza o algoritmo de busca da Árvore B.
+    \item \textbf{Filtragem Avançada:} Permite filtrar registros por atributos não 
+    indexados (Gênero, Contrato, Valores, etc...) percorrendo a árvore.
+    \item \textbf{Estatísticas:} Cálculo de médias de valores mensais segregados por status de cancelamento.
+    \item \textbf{Gerenciamento de Arquivo:} Opção para resetar a base binária a partir do CSV original.
+\end{enumerate}
+
+
+\subsection{Performance de Busca por ID vs Filtragem}
+A busca por ID comportou-se conforme a expectativa teórica, 
+retornando resultados instantaneamente.
+
+As operações de filtragem (e.g. buscar todos os clientes do sexo masculino) tem desempenho inferior. 
+Como apenas o ID é indexado, filtros quaisquer exigem cobrir toda a árvore, resultando em complexidade linear.
+Percebe-se, pois, que se a base de dados fosse da ordem de 100 ou 1000 vezes mais massiva, far-se-ia necessário
+o uso de \textit{Árvores B+} e/ou arquivos invertidos.
+
+\section{Conclusão}
+O projeto cumpriu os requisitos de manipulação de arquivos e implementação de estruturas de dados. 
+Para a base de dados do projeto, a utilização da Árvore B foi eficaz para a pesquisa de registros 
+por chave primária. 
+
+\end{document}
